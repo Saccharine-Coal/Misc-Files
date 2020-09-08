@@ -1,0 +1,74 @@
+import pygame as pg
+
+from os import sys
+
+# Settings
+WIDTH, HEIGHT = 1280, 720
+FPS = 60
+COLOR_KEY = (0, 0, 0)
+
+
+class Game:
+    def __init__(self):
+        pg.init()
+        self.screen = pg.display.set_mode((WIDTH, HEIGHT))
+        self.clock = pg.time.Clock()
+        pg.key.set_repeat(500, 100)
+
+    def new(self):
+        self.init()
+
+    def run(self):
+        """Runs pygame."""
+        while True:
+            self.dt = self.clock.tick(FPS) / 1000
+            self.events()
+            self.update()
+            self.draw()
+
+    def events(self):
+        """Catch all events here."""
+        for event in pg.event.get():
+            if event.type == pg.QUIT:
+                pg.quit()
+                sys.exit()
+            if event.type == pg.KEYDOWN:
+                if event.key == pg.K_ESCAPE:
+                    pg.quit()
+                    sys.exit()
+
+    def init(self):
+        self.RC = RayCast((WIDTH, HEIGHT))
+
+    def update(self):
+        self.RC.draw_mask()
+
+    def draw(self):
+        self.screen.fill(pg.color.Color("Light Blue"))
+        pg.display.set_caption("{:.2f}".format(self.clock.get_fps()))
+        # -----------------
+        self.screen.blit(self.RC.surface, (0, 0))
+        self.screen.blit(self.RC.mask, (0, 0), special_flags=pg.BLEND_RGB_SUB)
+        pg.display.flip()
+
+class RayCast:
+    def __init__(self, dim):
+        # surface
+        self.surface = pg.Surface(dim)
+        self.center = self.surface.get_rect().center
+        self.color = COLOR_KEY
+        self.surface.set_colorkey(self.color)
+        # mask
+        self.mask = pg.Surface(dim)
+        self.mask.set_alpha(150)
+        self.mask.set_colorkey(self.color)
+
+    def draw_mask(self):
+        self.mask.fill(self.color)
+        pg.draw.rect(self.mask, (50, 50, 50), pg.Rect(self.center, (300, 300)))
+
+
+# Create game object.
+g = Game()
+g.new()
+g.run()
