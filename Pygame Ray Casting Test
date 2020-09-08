@@ -1,0 +1,138 @@
+import pygame as pg
+
+from os import sys
+
+# Settings
+WIDTH, HEIGHT = 1280, 720
+FPS = 60
+
+class Game:
+    def __init__(self):
+        pg.init()
+        self.screen = pg.display.set_mode((WIDTH, HEIGHT))
+        self.clock = pg.time.Clock()
+        pg.key.set_repeat(500, 100)
+
+    def new(self):
+        self.init()
+
+    def run(self):
+        """Runs pygame."""
+        while True:
+            self.dt = self.clock.tick(FPS) / 1000
+            self.events()
+            self.update()
+            self.draw()
+
+    def events(self):
+        """Catch all events here."""
+        for event in pg.event.get():
+            if event.type == pg.QUIT:
+                pg.quit()
+                sys.exit()
+            if event.type == pg.KEYDOWN:
+                if event.key == pg.K_ESCAPE:
+                    pg.quit()
+                    sys.exit()
+
+    def init(self):
+        self.RC = RayCast((WIDTH, HEIGHT))
+        self.arc = self.RC._init_arc(100, 200, pg.mouse.get_pos())
+
+    def update(self):
+        self.RC.draw_arc(self.arc, pg.mouse.get_pos())
+
+    def draw(self):
+        self.screen.fill(pg.color.Color("Light Blue"))
+        pg.display.set_caption("{:.2f}".format(self.clock.get_fps()))
+        # -----------------
+        self.RC.draw_mask()
+        self.screen.blit(self.RC.surface, (0, 0))#, special_flags=pg.BLEND_RGBA_SUB)
+        self.screen.blit(self.RC.mask, (0, 0), special_flags=pg.BLEND_RGB_SUB)
+        pg.display.flip()
+
+class RayCast:
+    # All coordinates exist in the regular cartesian system, once it is drawn it is
+    # shifted to the correct screen position.
+    def __init__(self, dim):
+        self.surface = pg.Surface(dim)
+        self.mask = pg.Surface(dim)
+        self.mask.set_alpha(150)
+        self.color = (0, 0, 0)
+        self.mask.set_colorkey(self.color)
+        self.center = self.surface.get_rect().center
+        self.surface.set_colorkey(self.color)
+        #self.surface.fill(self.color)
+        self.walls = [pg.math.Vector2(300, 0)]#, pg.math.Vector2(0, 300)]
+        self.draw_list = []
+
+    # ---------------------------------------------------------
+    def _init_arc(self, num, length, pos):
+        obj_list = []
+        vector = pg.math.Vector2(0, 1)
+        for i in range(num):
+            angle = ((i/num)*360)
+            new_vector =  vector.rotate(angle)
+            new_vector.scale_to_length(length)
+            obj_list.append(new_vector)
+        return obj_list
+    
+    def draw_arc(self, obj_list, pos):
+        self.surface.fill((0, 0, 0))
+        for i, wall in enumerate(self.walls):
+            self.draw(self.center, wall) 
+            for i, vector in enumerate(obj_list):
+                self.draw(pos, vector, (255, 255, 0))
+                self.cast(self.center, wall, pos, vector)
+            pg.draw.circle(self.surface, (255, 255, 0), pos, 5)
+    
+    def draw_mask(self):
+        self.mask.fill(self.color)
+        if len(self.draw_list) is not 0:
+            pg.draw.polygon(self.mask, (50, 50, 50),
+                    self.draw_list)
+        self.draw_list = []
+    
+    def cast(self, pos1, v1, pos2, v2):
+        # https://en.wikipedia.org/wiki/Line%E2%80%93line_intersection
+        # second input is 'infinite'
+        x1, y1 = pos1
+        x2, y2 = self._shift_to(pos1, v1)
+        x3, y3 = pos2
+        x4, y4 = self._shift_to(pos2, v2)
+        denom = (x1-x2)*(y3-y4)-(y1-y2)*(x3-x4)
+        if denom and denom > 0:
+            t = ((x1-x3)*(y3-y4)-(y1-y3)*(x3-x4))/denom
+            u = -((x1-x2)*(y1-y3)-(y1-y2)*(x1-x3)/denom)
+            if t >=0 and t <=1.0 and u>=0:
+                p_t = (x1+t*(x2-x1), y1+t*(y2-y1))
+                x, y = p_t[:]
+                pg.draw.circle(self.surface, (0, 255, 0), (int(x), int(y)), 5)
+                #print(f'''Intersection Point T: {p_t}''')
+                self.draw(p_t, v2*3, (255, 0, 0))
+                if len(self.draw_list) is 0:
+                    # Right
+                    nvx, nvy = x2-pos2[0], y2-pos2[1]
+                    right_vector = pg.math.Vector2(nvx, nvy)
+                    # Left
+                    nvx, nvy = x1-pos2[0], y1-pos2[1]
+                    left_vector = pg.math.Vector2(nvx, nvy)
+                    self.draw_list = (
+                        [pos1, (x2, y2), self._shift_to((x2, y2), right_vector*10), 
+                        self._shift_to(pos1, left_vector*10)]
+                    )
+    
+    # ------------------------------------------------------------
+    
+    def draw(self, pos, vector, color=(10, 10, 10)):
+        #pg.draw.line(self.surface, (0, 0, 255), pos, self._shift_to(pos, vector*2))
+        pg.draw.line(self.surface, color, pos, self._shift_to(pos, vector))
+    
+    def _shift_to(self, position, item):
+        return tuple(int(a+b) for a, b in zip(position, item))
+
+
+# Create game object.
+g = Game()
+g.new()
+g.run()
