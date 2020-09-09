@@ -5,6 +5,12 @@ from os import sys
 # Settings
 WIDTH, HEIGHT = 1280, 720
 FPS = 60
+COLORKEY = (0, 0, 0)
+
+# Arc settings
+RAYS = 36
+LENGTH = 100
+TOT_ANGLE = 360
 
 class Game:
     def __init__(self):
@@ -36,51 +42,58 @@ class Game:
                     sys.exit()
 
     def init(self):
-        self.RC = RayCast((WIDTH, HEIGHT))
-        self.arc = self.RC._init_arc(100, 200, pg.mouse.get_pos())
+        self.RC = RayCast(self.screen)
+        self.arc = self.RC._init_arc(RAYS, LENGTH, pg.mouse.get_pos(), TOT_ANGLE)
 
     def update(self):
         self.RC.draw_arc(self.arc, pg.mouse.get_pos())
 
     def draw(self):
-        self.screen.fill(pg.color.Color("Light Blue"))
         pg.display.set_caption("{:.2f}".format(self.clock.get_fps()))
         # -----------------
         self.RC.draw_mask()
-        self.screen.blit(self.RC.surface, (0, 0))#, special_flags=pg.BLEND_RGBA_SUB)
-        self.screen.blit(self.RC.mask, (0, 0), special_flags=pg.BLEND_RGB_SUB)
+        self.screen.blit(self.RC.mask, (0, 0))
         pg.display.flip()
 
 class RayCast:
     # All coordinates exist in the regular cartesian system, once it is drawn it is
-    # shifted to the correct screen position.
+    # shifted to a specified center position. So the origin (0, 0) is the center of the
+    # screen when drawn. Pygame's (0, 0) is the top left corner of the screen.
     def __init__(self, dim):
-        self.surface = pg.Surface(dim)
-        self.mask = pg.Surface(dim)
-        self.mask.set_alpha(150)
-        self.color = (0, 0, 0)
-        self.mask.set_colorkey(self.color)
+        self.surface = dim
+        # Position the origin of the cart system is shifted to
         self.center = self.surface.get_rect().center
+        self.color = COLORKEY
         self.surface.set_colorkey(self.color)
-        #self.surface.fill(self.color)
-        self.walls = [pg.math.Vector2(300, 0)]#, pg.math.Vector2(0, 300)]
+        self.mask = pg.Surface((WIDTH, HEIGHT))
+        self.mask.set_colorkey(self.color)
+        self.mask.set_alpha(150)
+        self.walls = [
+            {
+            'vector': pg.math.Vector2(300, 300),
+            'draw': []
+            },
+            {'vector': pg.math.Vector2(-300, -100),
+            'draw': []
+            }
+        ]
         self.draw_list = []
 
     # ---------------------------------------------------------
-    def _init_arc(self, num, length, pos):
+    def _init_arc(self, num, length, pos, total_angle=360):
         obj_list = []
         vector = pg.math.Vector2(0, 1)
         for i in range(num):
-            angle = ((i/num)*360)
+            angle = ((i/num)*total_angle)
             new_vector =  vector.rotate(angle)
             new_vector.scale_to_length(length)
             obj_list.append(new_vector)
         return obj_list
     
     def draw_arc(self, obj_list, pos):
-        self.surface.fill((0, 0, 0))
-        for i, wall in enumerate(self.walls):
-            self.draw(self.center, wall) 
+        self.surface.fill(pg.color.Color("Light Blue"))
+        for wall in self.walls:
+            self.draw(self.center, wall['vector']) 
             for i, vector in enumerate(obj_list):
                 self.draw(pos, vector, (255, 255, 0))
                 self.cast(self.center, wall, pos, vector)
@@ -88,47 +101,56 @@ class RayCast:
     
     def draw_mask(self):
         self.mask.fill(self.color)
-        if len(self.draw_list) is not 0:
-            pg.draw.polygon(self.mask, (50, 50, 50),
-                    self.draw_list)
-        self.draw_list = []
+        for wall in self.walls:
+            if len(wall['draw']) is not 0:
+                pg.draw.polygon(self.mask, (50, 50, 50),
+                        wall['draw'])
+            wall['draw'] = []
     
-    def cast(self, pos1, v1, pos2, v2):
-        # https://en.wikipedia.org/wiki/Line%E2%80%93line_intersection
-        # second input is 'infinite'
-        x1, y1 = pos1
-        x2, y2 = self._shift_to(pos1, v1)
-        x3, y3 = pos2
-        x4, y4 = self._shift_to(pos2, v2)
-        denom = (x1-x2)*(y3-y4)-(y1-y2)*(x3-x4)
-        if denom and denom > 0:
-            t = ((x1-x3)*(y3-y4)-(y1-y3)*(x3-x4))/denom
-            u = -((x1-x2)*(y1-y3)-(y1-y2)*(x1-x3)/denom)
-            if t >=0 and t <=1.0 and u>=0:
-                p_t = (x1+t*(x2-x1), y1+t*(y2-y1))
-                x, y = p_t[:]
-                pg.draw.circle(self.surface, (0, 255, 0), (int(x), int(y)), 5)
-                #print(f'''Intersection Point T: {p_t}''')
-                self.draw(p_t, v2*3, (255, 0, 0))
-                if len(self.draw_list) is 0:
-                    # Right
-                    nvx, nvy = x2-pos2[0], y2-pos2[1]
-                    right_vector = pg.math.Vector2(nvx, nvy)
+    def cast(self, pos1, wall, pos2, v2):
+        # https://stackoverflow.com/questions/563198/how-do-you-detect-where-two-line-segments-intersect/565282#565282
+        # [q, q+s], [p, p+r] = [pos1, pos1 + v1], [pos2, pos2 + v2]
+        # [q, us], [p, tr], such that q, s, p, and r are vectors
+        # u is a scalar for s, and t is a scalar for r
+        # let t be 'infinite' t>=0, and U = {u| u>=0, u<=1.0}, therefore r is the light ray
+        # we only care about U, since it is the total length of the wall
+        # intersection point = (p+tr = q+us)
+        v1 = wall['vector']
+        s, r = v1, v2
+        if r.cross(s) and len(wall['draw']) is 0:
+            # Python evaluates 0 as False, we don't need to check other rays
+            # if a ray has hit the wall already
+            q, p = pg.math.Vector2(pos1), pg.math.Vector2(pos2)
+            t = (q-p).cross(s)/(r.cross(s))
+            u = (p-q).cross(r)/(s.cross(r))
+            if t>=0 and u>=0 and u<=1.0:
+                # int_points = (p+t*r, q+u*s), use q+u*s because it is simpler
+                int_vector = (q+u*s)
+                x, y = int(int_vector[0]), int(int_vector[1])
+                pg.draw.circle(self.surface, (0, 255, 0), (x, y), 5)
+                self.draw(int_vector, r*6, (255, 0, 0))
+                if len(wall['draw']) is 0:
                     # Left
-                    nvx, nvy = x1-pos2[0], y1-pos2[1]
-                    left_vector = pg.math.Vector2(nvx, nvy)
-                    self.draw_list = (
-                        [pos1, (x2, y2), self._shift_to((x2, y2), right_vector*10), 
-                        self._shift_to(pos1, left_vector*10)]
+                    nvx, nvy = q.x-pos2[0], q.y-pos2[1]
+                    left_vector = pg.math.Vector2(nvx, nvy)*4
+                    # Right
+                    prpr_end_pt = self._shift_to(self.center, s)
+                    nvx, nvy = prpr_end_pt[0]-pos2[0], prpr_end_pt[1]-pos2[1]
+                    right_vector = pg.math.Vector2(nvx, nvy)*4
+                    wall['draw'] = (
+                        [pos1, prpr_end_pt, self._shift_to(prpr_end_pt, right_vector), 
+                        self._shift_to(pos1, left_vector)]
                     )
     
     # ------------------------------------------------------------
     
     def draw(self, pos, vector, color=(10, 10, 10)):
-        #pg.draw.line(self.surface, (0, 0, 255), pos, self._shift_to(pos, vector*2))
+        ''' Draws vector to the appropriate shifted position.'''
         pg.draw.line(self.surface, color, pos, self._shift_to(pos, vector))
     
     def _shift_to(self, position, item):
+        ''' Shifts the item to the specified position and returns the shifted coords as
+        a tuple.'''
         return tuple(int(a+b) for a, b in zip(position, item))
 
 
