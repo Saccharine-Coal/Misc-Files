@@ -118,8 +118,8 @@ class RayCast:
         v1 = wall['vector']
         s, r = v1, v2
         if r.cross(s) and len(wall['draw']) is 0:
-            # Python evaluates 0 as False, we don't need to check other rays
-            # if a ray has hit the wall already
+            # Python evaluates 0 as False, if the cross product is 0, then the lines exist
+            # in the same span. They can be parallel, colinear, etc. Which we don't care about
             q, p = pg.math.Vector2(pos1), pg.math.Vector2(pos2)
             t = (q-p).cross(s)/(r.cross(s))
             u = (p-q).cross(r)/(s.cross(r))
