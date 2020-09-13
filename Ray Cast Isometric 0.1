@@ -1,0 +1,360 @@
+import pygame as pg
+
+from os import sys
+
+from random import randint
+
+# Settings
+WIDTH, HEIGHT = 1280, 720
+FPS = 60
+COLORKEY = (0, 0, 0)
+
+# Ray settings
+RAYS = 120
+TOT_ANGLE = 360
+DRAW_ARC = False
+LENGTH = 100
+
+# Draw a reflected vector from every ray
+REFLECT = False
+
+# Grid settings
+W = 13
+H = 8
+# Tile Settings
+TILESIZE = 64
+TILEHEIGHT = 128
+TILEWIDTH = 128
+#IMG = pg.image.load('images/grass_tile.png').convert_alpha()
+
+# 0 means every tile is a wall
+DENSITY = 5
+
+
+class Game:
+    def __init__(self):
+        pg.init()
+        self.screen = pg.display.set_mode((WIDTH, HEIGHT))
+        self.clock = pg.time.Clock()
+        pg.key.set_repeat(500, 100)
+
+    def new(self):
+        self.init()
+
+    def run(self):
+        """Runs pygame."""
+        while True:
+            self.dt = self.clock.tick(FPS) / 1000
+            self.events()
+            self.update()
+            self.draw()
+
+    def events(self):
+        """Catch all events here."""
+        for event in pg.event.get():
+            if event.type == pg.QUIT:
+                pg.quit()
+                sys.exit()
+            if event.type == pg.KEYDOWN:
+                if event.key == pg.K_ESCAPE:
+                    pg.quit()
+                    sys.exit()
+
+    def init(self):
+        self.RC = RayCast(self.screen)
+        self.arc = self.RC._init_arc(RAYS, pg.mouse.get_pos(), TOT_ANGLE)
+        self.grid = Grid(self.screen)
+
+    def update(self):
+        self.mouse_pos = pg.mouse.get_pos()
+
+    def draw(self):
+        pg.display.set_caption("{:.2f}".format(self.clock.get_fps()))
+        # -----------------
+        self.RC.surface.fill((0, 0, 0))
+        self.screen.blit(self.grid.surface, (0, 0))
+        if DRAW_ARC:
+            self.RC.draw_arc(self.arc, self.mouse_pos)
+        self.RC.ray_cast_list(self.grid.wall_list, self.arc, self.mouse_pos)
+        # -----------------
+        pg.display.flip()
+
+
+class RayCast:
+    # All coordinates exist in the regular cartesian system, once it is drawn it is
+    # shifted to a specified center position. So the origin (0, 0) is the center of the
+    # screen when drawn. Pygame's (0, 0) is the top left corner of the screen.
+    def __init__(self, surface):
+        self.surface = surface
+        # Position the origin of the cartesian system is shifted to
+        # self.surface.get_rect().center
+        self.center = self.surface.get_rect().center
+        self.color = COLORKEY
+        self.surface.set_colorkey(self.color)
+        self.IMG = pg.image.load('images/grey_cube.png').convert_alpha()
+
+    # INIT ---------------------------------------------------------
+    def _init_arc(self, num, pos, total_angle=360):
+        """Compiles a list of radially oriented vectors pointing away from the defined position."""
+        obj_list = []
+        vector = pg.math.Vector2(0, 1)
+        for i in range(num):
+            angle = (i / num) * total_angle
+            new_vector = vector.rotate(angle)
+            new_vector.normalize()
+            obj_list.append(new_vector)
+        return obj_list
+
+    # DRAW -------------------------------------------
+
+    def draw_arc(self, obj_list, pos):
+        for ray in obj_list:
+            self._draw(pos, ray * LENGTH, (255, 255, 0))
+
+    def _draw(self, pos, vector, color=(10, 10, 10), width=1):
+        """ Draws vector to the appropriate shifted position."""
+        pg.draw.line(self.surface, color, pos, self._shift_to(pos, vector), width)
+
+    # RAY CASTING ------------------------------------------------------------
+
+    def ray_cast_list(self, list_, rays, pos):
+        a = []
+        sorted_list = self._sort_grid_list(list_, pos)
+        for tile in sorted_list:
+            result = self.ray_cast_tile(rays, pos, tile["hitbox"])
+            if result:
+                free_rays, lit_walls = result[:]
+                # Update old ray list with new rays list.
+                # Don't remove from an iterated list during iteration!
+                hit_rays = abs(len(rays)-len(free_rays))
+                rays = free_rays
+                #draw_order.append(tile['hitbox']['rect'][0:2])
+                for lit_wall in lit_walls:
+                    # Simple brightness visualization
+                    i = 255*16*hit_rays/RAYS
+                    i = max(min(i, 255), 75)
+                    self._draw(
+                        lit_wall[0],
+                        lit_wall[1] * 2,
+                        (i, i, i),
+                        int(TILESIZE / 20),
+                    )
+                    a.append([lit_wall[0], (self._shift_to(lit_wall[0], lit_wall[1]*2))])
+            l = list(set().union(*a))
+            l.sort(key=lambda coord: self._get_length(coord, pos))
+            #pg.draw.lines(self.surface, (0, 255, 0), True, l)
+            if len(rays) is 0:
+                # Break out of the function if there are no more free rays.
+                return
+
+    def ray_cast_tile(self, rays, pos, tile_sub_list):
+        """Biggest bug was removing from an iterated list during iteration, which let rays
+        pass through walls. Don't remove during iteration!!!!"""
+        self.hit = False
+        sorted_vector_list = self._sort_vectors(tile_sub_list, pos, 0, 4)
+        walls_hit = []
+        for wall_pos, wall_vector in sorted_vector_list:
+            hit, free_rays = self.iterate_through_rays(
+                wall_pos, wall_vector * 2, pos, rays
+            )[:]
+            if hit:
+                rays = free_rays
+                self.hit = True
+                walls_hit.append([wall_pos, wall_vector])
+        if self.hit:
+            return rays, walls_hit
+
+    def iterate_through_rays(self, vector_pos, vector, ray_pos, ray_list):
+        """Iterate through a given list and return a new list with only rays that have not hit something."""
+        # Any ray that doesn't hit anything will be called a 'free' ray.
+        free_rays = ray_list.copy()
+        hit = False
+        for ray in ray_list:
+            result = self.cast(vector_pos, vector, ray_pos, ray)
+            if result:
+                int_vector = result
+                pg.draw.line(self.surface, (255, 255, 255), ray_pos, int_vector)
+                free_rays.remove(ray)
+                hit = True
+                if REFLECT:
+                    self._draw(int_vector, ray.reflect(vector) * -100, (175, 175, 175))
+        return hit, free_rays
+
+    def cast(self, pos1, v1, pos2, v2):
+        """This is the basis of the ray cast program."""
+        # https://stackoverflow.com/questions/563198/how-do-you-detect-where-two-line-segments-intersect/565282#565282
+        # [q, q+s], [p, p+r] = [pos1, pos1 + v1], [pos2, pos2 + v2]
+        # [q, us], [p, tr], such that q, s, p, and r are vectors
+        # u is a scalar for s, and t is a scalar for r
+        # let t be 'infinite' t>=0, and U = {u| u>=0, u<=1.0}, therefore r is the light ray
+        # we only care about the set U, since it contains only vectors that are the size of the segment.
+        # intersection point = (p+tr = q+us)
+        s, r = v1, v2
+        if r.cross(s):
+            # Python evaluates 0 as False, if the cross product is 0, then the lines exist
+            # in the same span. They can be parallel, colinear, etc. Which we don't care about
+            q, p = pg.math.Vector2(pos1), pg.math.Vector2(pos2)
+            t = (q - p).cross(s) / (r.cross(s))
+            u = (p - q).cross(r) / (s.cross(r))
+            if t >= 0 and u >= 0 and u <= 1:
+                # intersected_point = (p+t*r, q+u*s), use q+u*s because it is simpler
+                int_vector = q + u * s
+                # Round, because pygame doesn't like floats
+                x, y = int(int_vector[0]), int(int_vector[1])
+                return int_vector
+        else:
+            return False
+
+    # UTILITIES ----------------------------------------------
+
+    def _sort_vectors(self, wall, pos, start, stop):
+        """Get a list of points and return points that are closest to the input pos."""
+        new_set = []
+        for wall_set in wall["sets"]:
+            for wall_v in wall_set["vectors"]:
+                new_set.append([wall_set["pos"], wall_v / 2])
+        new_set.sort(key=lambda x: self._get_length_from(x[0], x[1], pos))
+        return new_set[start:stop]
+
+    def _sort_list(self, list_, target_pos):
+        """Sorts list in ascending order based on specified function return."""
+        list_.sort(key=lambda child: self._get_length(child["pos"], target_pos))
+        return list_
+
+    def _sort_grid_list(self, list_, target_pos):
+        """Sorts list in ascending order based on specified function return."""
+        list_.sort(
+            key=lambda tile: self._get_length(
+                tile["hitbox"].get("rect").center, target_pos
+            )
+        )
+        return list_
+
+    def _get_length(self, pos, target_pos):
+        """Returns the length between two points."""
+        return pg.math.Vector2(
+            tuple(int(a - b) for a, b in zip(pos, target_pos))
+        ).length()
+
+    def _get_length_from(self, v_pos, vector, pos):
+        """Returns the length between two points."""
+        inted_vector_coordinate = self._shift_to(v_pos, vector)
+        return (
+            pg.math.Vector2(
+                tuple(int(a - b) for a, b in zip(inted_vector_coordinate, pos))
+            ).length()
+            / 2
+        )
+
+    # ------------------------------------------------------------
+
+    def _shift_to(self, position, item):
+        """ Shifts the item to the specified position and returns the shifted coords as
+        a tuple."""
+        return tuple(int(a + b) for a, b in zip(position, item))
+
+
+class Grid:
+    """Grid object that stores Tile like objects in it."""
+    def __init__(self, surface):
+        self.tilewidth = TILEWIDTH
+        self.tileheight = TILEHEIGHT
+        self.surface = surface
+        self.center = surface.get_rect().center
+        self.init()
+    
+    def init(self):
+        self._create_grid_blank(10, 10)
+        self._init_wall_list()
+        self.surface = self._render()
+
+    def _create_grid_blank(self, width, height, target_object=0):
+        """Creates a grid with specified data population."""
+        self.width = width * TILEWIDTH
+        self.height = height * TILEHEIGHT
+        """Uses list comprehension to build a data set for all tiles in the grid."""
+        self.array = [
+            [
+                {
+                    "type": randint(0, DENSITY),
+                    "hitbox": {
+                        "rect": pg.Rect(
+                            self._convert_cart(x , y), self._convert_cart(1, 1)
+                        ),
+                        "sets": [
+                            {
+                                "vectors": [
+                                    pg.math.Vector2(self._convert_cart(1, 0)),
+                                    pg.math.Vector2(self._convert_cart(0, 1)),
+                                ],
+                                "pos": self._helper(x, y),
+                            },
+                            {
+                                "vectors": [
+                                    pg.math.Vector2(self._convert_cart(-1, 0)),
+                                    pg.math.Vector2(self._convert_cart(0, -1)),
+                                ],
+                                "pos": self._helper((x + 1), (y + 1)),
+                            },
+                        ],
+                    },
+                }
+                for x in range(width)
+            ]
+            for y in range(height)
+        ]
+        self.img1 = pg.image.load('images/grass_tile.png').convert_alpha()
+        self.img2 = pg.image.load('images/grey_cube.png').convert_alpha()
+        print(self.array[0][0]['hitbox']['sets'][0]['pos'], self.array[0][0]['hitbox']['sets'][1]['pos'])
+    
+    def _init_wall_list(self):
+        """Goes through array and compiles a list only of walls which we define as being 0."""
+        self.wall_list = []
+        for x, row in enumerate(self.array):
+            for y, data in enumerate(row):
+                if data["type"] is 0:
+                    self.wall_list.append(data)
+
+#     def render_grid(self, img_str):
+#         temp_surface = pg.Surface((WIDTH, HEIGHT))
+#         self._render(temp_surface, img_str)
+#         return temp_surface
+
+    def _render(self):#, surface, img_str):
+        temp_surface = pg.Surface(self.surface.get_rect()[2:4])
+        for x, row in enumerate(self.array):
+            for y, tile in enumerate(row):
+                if tile['type'] is 0:
+                    img = self.img2
+                else:
+                    img = self.img1
+                temp_surface.blit(img, tile['hitbox']['rect'][0:2])
+        return temp_surface
+
+    def _convert_cart(self, x, y):
+        cart_x = x * self.tilewidth/2
+        cart_y = y * self.tileheight/2
+        iso_x = cart_x - cart_y
+        iso_y = (cart_x + cart_y) / 2
+        return (iso_x, iso_y)
+    
+    def _get_tile_vert(self, x, y):
+        pos = (self.center[0]/1.1, 0)
+        i, n = self._shift_to(pos, self._convert_cart(x, y))
+        #pg.draw.circle(self.surface, (255, 0, 0), self._shift_to((TILESIZE, TILESIZE), (i, n)), 3)
+        #i, n = self._shift_to(pos, self._convert_cart(x+1, y+1))
+        #pg.draw.circle(self.surface, (0, 255, 0), self._shift_to((TILESIZE, TILESIZE), (i, n)), 6)
+
+    def _shift_to(self, position, item):
+        """ Shifts the item to the specified position and returns the shifted coords as
+        a tuple."""
+        return tuple(int(a + b) for a, b in zip(position, item))
+    
+    def _helper(self, x, y):
+        half_iso = self._shift_to((TILESIZE, TILESIZE), self._convert_cart(x, y))
+        return half_iso
+
+# Create game object.
+g = Game()
+g.new()
+g.run()
